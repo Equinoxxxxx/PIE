@@ -1,27 +1,23 @@
 """
 The code implementation of the paper:
-
 A. Rasouli, I. Kotseruba, T. Kunic, and J. Tsotsos, "PIE: A Large-Scale Dataset and Models for Pedestrian Intention Estimation and
 Trajectory Prediction", ICCV 2019.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
 """
 
 import numpy as np
 import os
 import pickle
 import time
+import matplotlib.pyplot as plt
 
 from keras import backend as K
 from keras import regularizers
@@ -39,6 +35,7 @@ from keras.layers.recurrent import LSTM
 from keras.models import Model
 from keras.models import load_model
 from keras.optimizers import RMSprop
+from keras.utils import multi_gpu_model
 from keras.preprocessing.image import img_to_array
 from keras.preprocessing.image import load_img
 from sklearn.metrics import accuracy_score
@@ -50,7 +47,7 @@ from utils import *
 #from utilities.jaad_utilities import *
 #from utilities.train_utilities import *
 
-K.set_image_dim_ordering('tf')
+K.image_data_format() == 'channels_last'
 
 
 class PIEIntent(object):
@@ -66,11 +63,9 @@ class PIEIntent(object):
         _lstm_recurrent_dropout: recurrent dropout
         _convlstm_num_filters: number of filters in convLSTM
         _convlstm_kernel_size: kernel size in convLSTM
-
     Model attributes: set during training depending on the data
         _encoder_input_size: size of the encoder input
         _decoder_input_size: size of the encoder_output
-
     Methods:
         load_images_and_process: generates trajectories by sampling from pedestrian sequences
         get_data_slices: generate tracks for training/testing
@@ -124,7 +119,7 @@ class PIEIntent(object):
                  file_name='',
                  data_subset='',
                  data_type='',
-                 save_root_folder=os.environ['PIE_PATH'] + '/data/'):
+                 save_root_folder='../work_dirs/data/'):
         """
         A path generator method for saving model and config data. Creates directories
         as needed.
@@ -490,7 +485,8 @@ class PIEIntent(object):
               optimizer_params={'lr': 0.00001, 'clipvalue': 0.0, 'decay': 0.0},
               loss=['binary_crossentropy'],
               metrics=['acc'],
-              data_opts=''):
+              data_opts='',
+              gpu=1):
         """
         Training method for the model
         :param data_train: training data
@@ -568,6 +564,8 @@ class PIEIntent(object):
                             decay=optimizer_params['decay'],
                             clipvalue=optimizer_params['clipvalue'])
 
+        if gpu>1:
+            train_model = multi_gpu_model(train_model, gpus=gpu)
         train_model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
         print('TRAINING: loss={} metrics={}'.format(loss, metrics))
 
@@ -575,15 +573,13 @@ class PIEIntent(object):
         model_folder_name = time.strftime("%d%b%Y-%Hh%Mm%Ss")
 
         model_path, _ = self.get_path(type_save='models',
-                                      model_name='convlstm_encdec',
+                                      model_name='intent',
                                       models_save_folder=model_folder_name,
-                                      file_name='model.h5',
-                                      save_root_folder='data')
+                                      file_name='model.h5')
         config_path, _ = self.get_path(type_save='models',
-                                       model_name='convlstm_encdec',
+                                       model_name='intent',
                                        models_save_folder=model_folder_name,
-                                       file_name='configs',
-                                       save_root_folder='data')
+                                       file_name='configs')
 
         #Save config and training param files
         with open(config_path+'.pkl', 'wb') as fid:
@@ -629,8 +625,17 @@ class PIEIntent(object):
         history_path, saved_files_path = self.get_path(type_save='models',
                                                        model_name='convlstm_encdec',
                                                        models_save_folder=model_folder_name,
-                                                       file_name='history.pkl',
-                                                       save_root_folder='data')
+                                                       file_name='history.pkl')
+        # plot loss and val metric
+        plot_path = os.path.join(saved_files_path, 'plot')
+        if not os.path.exists(plot_path):
+            os.makedirs(plot_path)
+        train_intent_acc = history.history['acc']
+        val_intent_acc = history.history['val_acc']
+        # draw intent metric
+        plt.plot(train_intent_acc, color='r')
+        plt.plot(val_intent_acc, color='b')
+        plt.savefig(os.path.join(plot_path, 'intent_metric.png'))
 
         with open(history_path, 'wb') as fid:
             pickle.dump(history.history, fid, pickle.HIGHEST_PROTOCOL)

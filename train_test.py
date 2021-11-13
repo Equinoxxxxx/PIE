@@ -1,21 +1,16 @@
 """
 The code implementation of the paper:
-
 A. Rasouli, I. Kotseruba, T. Kunic, and J. Tsotsos, "PIE: A Large-Scale Dataset and Models for Pedestrian Intention Estimation and
 Trajectory Prediction", ICCV 2019.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
 """
 
 import os
@@ -31,70 +26,8 @@ import tensorflow as tf
 
 from prettytable import PrettyTable
 
-dim_ordering = K.image_dim_ordering()
-
-
-def train_predict(dataset='pie',
-                  train_test=2, 
-                  intent_model_path='data/pie/intention/context_loc_pretrained'):
-    data_opts = {'fstride': 1,
-                 'sample_type': 'all',
-                 'height_rng': [0, float('inf')],
-                 'squarify_ratio': 0,
-                 'data_split_type': 'default',  # kfold, random, default
-                 'seq_type': 'trajectory',
-                 'min_track_size': 61,
-                 'random_params': {'ratios': None,
-                                 'val_data': True,
-                                 'regen_data': True},
-                 'kfold_params': {'num_folds': 5, 'fold': 1}}
-
-    t = PIEPredict()
-    pie_path = os.environ.copy()['PIE_PATH']
-
-    if dataset == 'pie':
-        imdb = PIE(data_path=pie_path)
-
-    traj_model_opts = {'normalize_bbox': True,
-                       'track_overlap': 0.5,
-                       'observe_length': 15,
-                       'predict_length': 45,
-                       'enc_input_type': ['bbox'],
-                       'dec_input_type': ['intention_prob', 'obd_speed'],
-                       'prediction_type': ['bbox'] 
-                       }
-
-    speed_model_opts = {'normalize_bbox': True,
-                       'track_overlap': 0.5,
-                       'observe_length': 15,
-                       'predict_length': 45,
-                       'enc_input_type': ['obd_speed'], 
-                       'dec_input_type': [],
-                       'prediction_type': ['obd_speed'] 
-                       }
-
-    traj_model_path = 'data/pie/trajectory/loc_intent_speed_pretrained'
-    speed_model_path = 'data/pie/speed/speed_pretrained'
-
-    if train_test < 2:
-        beh_seq_val = imdb.generate_data_trajectory_sequence('val', **data_opts)
-        beh_seq_train = imdb.generate_data_trajectory_sequence('train', **data_opts)
-        traj_model_path = t.train(beh_seq_train, beh_seq_val, **traj_model_opts)
-        speed_model_path = t.train(beh_seq_train, beh_seq_val, **speed_model_opts)
-
-    if train_test > 0:
-        beh_seq_test = imdb.generate_data_trajectory_sequence('test', **data_opts)
-
-        perf_final = t.test_final(beh_seq_test,
-                                  traj_model_path=traj_model_path, 
-                                  speed_model_path=speed_model_path,
-                                  intent_model_path=intent_model_path)
-
-        t = PrettyTable(['MSE', 'C_MSE'])
-        t.title = 'Trajectory prediction model (loc + PIE_intent + PIE_speed)'
-        t.add_row([perf_final['mse-45'], perf_final['c-mse-45']])
-        
-        print(t)
+# dim_ordering = K.image_dim_ordering()
+DATA_PATH = '/home/y_feng/workspace6/datasets/PIE_dataset'
 
 #train models with data up to critical point
 #only for PIE
@@ -129,7 +62,7 @@ def train_intent(train_test=1):
 
     saved_files_path = ''
 
-    imdb = PIE(data_path=os.environ.copy()['PIE_PATH'])
+    imdb = PIE(data_path=DATA_PATH)
 
     pretrained_model_path = 'data/pie/intention/context_loc_pretrained'
 
@@ -142,12 +75,13 @@ def train_intent(train_test=1):
 
         saved_files_path = t.train(data_train=beh_seq_train,
                                    data_val=beh_seq_val,
-                                   epochs=400,
+                                   epochs=300,
                                    loss=['binary_crossentropy'],
                                    metrics=['accuracy'],
                                    batch_size=128,
                                    optimizer_type='rmsprop',
-                                   data_opts=data_opts)
+                                   data_opts=data_opts,
+                                   gpu=1)
 
         print(data_opts['seq_overlap_rate'])
 
@@ -167,6 +101,68 @@ def train_intent(train_test=1):
         tf.reset_default_graph()
         return saved_files_path
 
+def train_predict(dataset='pie',
+                  train_test=2, 
+                  intent_model_path='data/pie/intention/context_loc_pretrained'):
+    data_opts = {'fstride': 1,
+                 'sample_type': 'all',
+                 'height_rng': [0, float('inf')],
+                 'squarify_ratio': 0,
+                 'data_split_type': 'default',  # kfold, random, default
+                 'seq_type': 'trajectory',
+                 'min_track_size': 61,
+                 'random_params': {'ratios': None,
+                                 'val_data': True,
+                                 'regen_data': True},
+                 'kfold_params': {'num_folds': 5, 'fold': 1}}
+
+    t = PIEPredict()
+    # pie_path = os.environ.copy()['PIE_PATH']
+
+    if dataset == 'pie':
+        imdb = PIE(data_path=DATA_PATH)
+
+    traj_model_opts = {'normalize_bbox': True,
+                       'track_overlap': 0.5,
+                       'observe_length': 15,
+                       'predict_length': 45,
+                       'enc_input_type': ['bbox'],
+                       'dec_input_type': ['intention_prob', 'obd_speed'],
+                       'prediction_type': ['bbox'] 
+                       }
+
+    speed_model_opts = {'normalize_bbox': True,
+                       'track_overlap': 0.5,
+                       'observe_length': 15,
+                       'predict_length': 45,
+                       'enc_input_type': ['obd_speed'], 
+                       'dec_input_type': [],
+                       'prediction_type': ['obd_speed'] 
+                       }
+
+    traj_model_path = 'data/pie/trajectory/loc_intent_speed_pretrained'
+    speed_model_path = 'data/pie/speed/speed_pretrained'
+
+    if train_test < 2:  # Train
+        beh_seq_val = imdb.generate_data_trajectory_sequence('val', **data_opts)
+        beh_seq_train = imdb.generate_data_trajectory_sequence('train', **data_opts)
+        traj_model_path = t.train(beh_seq_train, beh_seq_val, epochs=60, **traj_model_opts)
+        speed_model_path = t.train(beh_seq_train, beh_seq_val, epochs=60, **speed_model_opts)
+
+    if train_test > 0:  # Test
+        beh_seq_test = imdb.generate_data_trajectory_sequence('test', **data_opts)
+
+        perf_final = t.test_final(beh_seq_test,
+                                  traj_model_path=traj_model_path, 
+                                  speed_model_path=speed_model_path,
+                                  intent_model_path=intent_model_path)
+
+        t = PrettyTable(['MSE', 'C_MSE'])
+        t.title = 'Trajectory prediction model (loc + PIE_intent + PIE_speed)'
+        t.add_row([perf_final['mse-45'], perf_final['c-mse-45']])
+        
+        print(t)
+        
 def main(dataset='pie', train_test=2):
 
       intent_model_path = train_intent(train_test=train_test)

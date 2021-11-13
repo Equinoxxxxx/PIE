@@ -21,6 +21,7 @@ import os
 import time
 import pickle
 import numpy as np
+import matplotlib.pyplot as plt
 
 from keras.layers import Input, RepeatVector, Dense, Permute
 from keras.layers import Concatenate, Multiply, Dropout
@@ -114,7 +115,7 @@ class PIEPredict(object):
                 raise ('Wrong data type is selected %s' % dt)
 
         d['image'] = dataset['image']
-        d['pid'] = dataset['pid']
+        d['ped_id'] = dataset['ped_id']
 
         #  Sample tracks from sequneces
         for k in d.keys():
@@ -184,6 +185,7 @@ class PIEPredict(object):
 
         observe_length = opts['observe_length']
         data_types = set(opts['enc_input_type'] + opts['dec_input_type'] + opts['prediction_type'])
+        # 将track分割为长为seq_length的样本
         data_tracks = self.get_tracks(data, data_types, observe_length,
                                       opts['predict_length'], opts['track_overlap'],
                                       opts['normalize_bbox'])
@@ -191,6 +193,7 @@ class PIEPredict(object):
         if opts['normalize_bbox']:
             observe_length -= 1
 
+        # 将长为seq_length的样本分为obs与pred两部分
         obs_slices = {}
         pred_slices = {}
 
@@ -212,9 +215,9 @@ class PIEPredict(object):
             dec_input = np.zeros(shape=pred_target.shape)
 
         return {'obs_image': obs_slices['image'],
-                'obs_pid': obs_slices['pid'],
+                'obs_pid': obs_slices['ped_id'],
                 'pred_image': pred_slices['image'],
-                'pred_pid': pred_slices['pid'],
+                'pred_pid': pred_slices['ped_id'],
                 'enc_input': enc_input,
                 'dec_input': dec_input,
                 'pred_target': pred_target,
@@ -225,7 +228,7 @@ class PIEPredict(object):
                  save_folder='models',
                  dataset='pie',
                  model_type='trajectory',
-                 save_root_folder='data/'):
+                 save_root_folder='../work_dirs/data/'):
         """
         A path generator method for saving model and config data. It create directories if needed.
         :param file_name: The actual save file name , e.g. 'model.h5'
@@ -383,12 +386,24 @@ class PIEPredict(object):
                                 batch_size=batch_size, epochs=epochs,
                                 validation_data=val_data, verbose=1,
                                 callbacks=call_backs)
-
         print('Train model is saved to {}'.format(model_path))
 
         history_path, saved_files_path = self.get_path(save_folder=model_folder_name,
                                                        model_type=model_type,
                                                        file_name='history.pkl')
+        # plot loss and val metric
+        plot_path = os.path.join(saved_files_path, 'plot')
+        if not os.path.exists(plot_path):
+            os.makedirs(plot_path)
+
+        train_mse = history.history['loss']
+        val_mse = history.history['val_loss']
+
+        # draw traj metric
+        plt.plot(train_mse, color='r')
+        plt.plot(val_mse, color='b')
+        plt.savefig(os.path.join(plot_path, 'metric.png'))
+        plt.close()
 
         with open(history_path, 'wb') as fid:
             pickle.dump(history.history, fid, pickle.HIGHEST_PROTOCOL)
