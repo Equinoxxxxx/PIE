@@ -668,7 +668,7 @@ class PIEIntent(object):
                                                r_state = False,
                                                r_sequence=False)(decoder_concat_inputs)
 
-        decoder_dense_output = Dense(self._decoder_dense_output_size,
+        decoder_dense_output = Dense(1,
                                      activation='sigmoid',
                                      name='intent_fc')(decoder_model)
 
@@ -686,7 +686,7 @@ class PIEIntent(object):
         # Generate Encoder LSTM Unit
         speed_encoder = self.create_lstm_model(name='speed_encoder')
         speed_encoder_outputs_states = speed_encoder(speed_attention_net)
-        speed_encoder_states = speed_encoder_outputs_states[1:]
+        speed_encoder_states = speed_encoder_outputs_states[1:]  # [h, c]
 
         # Generate Decoder LSTM unit
         speed_decoder = self.create_lstm_model(name='speed_decoder', r_state=False, r_sequence=True)
@@ -789,8 +789,9 @@ class PIEIntent(object):
               loss={'intent_fc': 'binary_crossentropy','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
               loss_weights={'intent_fc': 1,'speed_dec_fc': 1, 'traj_dec_fc': 1},
               metrics={'intent_fc': 'acc','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
-              data_opts='',
-              gpu=1):
+              data_opts={},
+              gpu=1,
+              early_stop=False):
         """
         Training method for the model
         :param data_train: training data
@@ -819,16 +820,17 @@ class PIEIntent(object):
                                                       'epochs_drop_rate': 20.0,
                                                       'plateau_patience': 5,
                                                       'min_lr': 0.0000001,
-                                                      'monitor_value': 'traj_dec_fc_loss'},
+                                                      'monitor_value': 'val_traj_dec_fc_mean_squared_error'},
                         'model': 'convlstm_encdec',
                         'data_type': data_type,
                         'overlap': data_opts['seq_overlap_rate'],
                         'dataset': 'pie'}
         self._model_type = 'convlstm_encdec'
-        seq_length = data_opts['max_size_observe']
+        obs_length = data_opts['max_size_observe']
+        pred_length = data_opts['max_size_predict']
         # import pdb; pdb.set_trace()
-        train_d = self.get_data(data_train, observe_length=seq_length, track_overlap=data_opts['seq_overlap_rate'])
-        val_d = self.get_data(data_val, observe_length=seq_length, track_overlap=data_opts['seq_overlap_rate'])
+        train_d = self.get_data(data_train, observe_length=obs_length, predict_length=pred_length, track_overlap=data_opts['seq_overlap_rate'])
+        val_d = self.get_data(data_val, observe_length=obs_length, predict_length=pred_length, track_overlap=data_opts['seq_overlap_rate'])
 
         train_obs_bbox = np.array(train_d['obs_bbox_normed'])
         train_obs_speed = np.array(train_d['obs_obd_speed'])
@@ -921,8 +923,10 @@ class PIEIntent(object):
             fid.write("\n####### Training config #######\n")
             fid.write(str(train_config))
 
-        main_metric = 'traj_dec_fc_loss'
-        early_stop = EarlyStopping(monitor='traj_dec_fc_loss',
+        main_metric = 'val_traj_dec_fc_mean_squared_error'
+        if loss_weights['traj_dec_fc'] == 0:
+            main_metric = 'val_intent_fc_acc'
+        early_stopping = EarlyStopping(monitor=main_metric,
                                    min_delta=0.0001,
                                    patience=5,
                                    verbose=1)
@@ -930,14 +934,16 @@ class PIEIntent(object):
                                              filepath=model_path,
                                              save_best_only=True,
                                              save_weights_only=False,
-                                             monitor=train_config['learning_scheduler_params']['monitor_value'])  #, mode = 'min'
-        plateau_sch = ReduceLROnPlateau(monitor=train_config['learning_scheduler_params']['monitor_value'],
+                                             monitor=main_metric)  #, mode = 'min'
+        plateau_sch = ReduceLROnPlateau(monitor=main_metric,
                 factor=train_config['learning_scheduler_params']['step_drop_rate'],
                 patience=train_config['learning_scheduler_params']['plateau_patience'],
                 min_lr=train_config['learning_scheduler_params']['min_lr'],
                 verbose = 1)
 
-        call_backs = [checkpoint, early_stop, plateau_sch]
+        call_backs = [checkpoint, plateau_sch]
+        if early_stop:
+            call_backs = [checkpoint, early_stopping, plateau_sch]
 
         history = train_model.fit(x=train_data[0],
                                   y=train_data[1],
@@ -950,8 +956,7 @@ class PIEIntent(object):
         history_path, saved_files_path = self.get_path(type_save='models',
                                                        model_name='joint_model',
                                                        models_save_folder=model_folder_name,
-                                                       file_name='history.pkl',
-                                                       save_root_folder='data')
+                                                       file_name='history.pkl')
         '''
         history.history.keys():
         ['val_loss', 'val_intent_fc_loss', 'val_speed_dec_fc_loss', 'val_traj_dec_fc_loss', 'val_intent_fc_acc', 'val_speed_dec_fc_mean_squared_error', 'val_traj_dec_fc_mean_squared_error', 
@@ -971,18 +976,27 @@ class PIEIntent(object):
         train_speed_mse = history.history['speed_dec_fc_mean_squared_error']
         val_speed_mse = history.history['val_speed_dec_fc_mean_squared_error']
         # draw traj metric
-        plt.plot(train_traj_mse, color='r')
-        plt.plot(val_traj_mse, color='b')
+        plt.plot(train_traj_mse, color='r', label='train')
+        plt.plot(val_traj_mse, color='b', label='val')
+        plt.xlabel('epoch')
+        plt.ylabel('mse')
+        plt.legend(['train', 'val'])
         plt.savefig(os.path.join(plot_path, 'traj_metric.png'))
         plt.close()
         # draw intent metric
-        plt.plot(train_intent_acc, color='r')
-        plt.plot(val_intent_acc, color='b')
+        plt.plot(train_intent_acc, color='r', label='train')
+        plt.plot(val_intent_acc, color='b', label='val')
+        plt.xlabel('epoch')
+        plt.ylabel('acc')
+        plt.legend(['train', 'val'])
         plt.savefig(os.path.join(plot_path, 'intent_metric.png'))
         plt.close()
         # draw speed metric
-        plt.plot(train_speed_mse, color='r')
-        plt.plot(val_speed_mse, color='b')
+        plt.plot(train_speed_mse, color='r', label='train')
+        plt.plot(val_speed_mse, color='b', label='val')
+        plt.xlabel('epoch')
+        plt.ylabel('mse')
+        plt.legend(['train', 'val'])
         plt.savefig(os.path.join(plot_path, 'speed_metric.png'))
         plt.close()
 
@@ -1095,3 +1109,18 @@ class ParallelModelCheckpoint(ModelCheckpoint):
 
     def set_model(self, model):
         super(ParallelModelCheckpoint,self).set_model(self.single_model)
+
+def getPrecision(y_true, y_pred):
+    TP = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))#TP
+    N = (-1)*K.sum(K.round(K.clip(y_true-K.ones_like(y_true), -1, 0)))#N
+    TN=K.sum(K.round(K.clip((y_true-K.ones_like(y_true))*(y_pred-K.ones_like(y_pred)), 0, 1)))#TN
+    FP=N-TN
+    precision = TP / (TP + FP + K.epsilon())#TT/P
+    return precision
+ 
+def getRecall(y_true, y_pred):
+    TP = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))#TP
+    P=K.sum(K.round(K.clip(y_true, 0, 1)))
+    FN = P-TP #FN=P-TP
+    recall = TP / (TP + FN + K.epsilon())#TP/(TP+FN)
+    return recall

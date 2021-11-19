@@ -129,15 +129,15 @@ class PIEPredict(object):
         if normalize:
             if 'bbox' in data_types:
                 for i in range(len(d['bbox'])):
-                    d['bbox'][i] = np.subtract(d['bbox'][i][1:], d['bbox'][i][0]).tolist()
+                    d['bbox'][i] = np.subtract(d['bbox'][i][:], d['bbox'][i][0]).tolist()
             if 'center' in data_types:
                 for i in range(len(d['center'])):
-                    d['center'][i] = np.subtract(d['center'][i][1:], d['center'][i][0]).tolist()
+                    d['center'][i] = np.subtract(d['center'][i][:], d['center'][i][0]).tolist()
             #  Adjusting the length of other data types
-            for k in d.keys():
-                if k != 'bbox' and k != 'center':
-                    for i in range(len(d[k])):
-                        d[k][i] = d[k][i][1:]
+            # for k in d.keys():
+            #     if k != 'bbox' and k != 'center':
+            #         for i in range(len(d[k])):
+            #             d[k][i] = d[k][i][1:]
 
         return d
 
@@ -190,8 +190,8 @@ class PIEPredict(object):
                                       opts['predict_length'], opts['track_overlap'],
                                       opts['normalize_bbox'])
 
-        if opts['normalize_bbox']:
-            observe_length -= 1
+        # if opts['normalize_bbox']:
+        #     observe_length -= 1
 
         # 将长为seq_length的样本分为obs与pred两部分
         obs_slices = {}
@@ -288,6 +288,7 @@ class PIEPredict(object):
               lr=0.001,
               loss='mse',
               learning_scheduler=True,
+              traj_only=False,
               **model_opts):
         """
         Training method for the model
@@ -360,7 +361,7 @@ class PIEPredict(object):
                      val_data['dec_input']],
                     val_data['pred_target'])
 
-        pie_model.compile(loss=loss, optimizer=optimizer)
+        pie_model.compile(loss=loss, optimizer=optimizer, metrics=['mse'])
 
         print("##############################################")
         print(" Training for predicting sequences of size %d" % self._predict_length)
@@ -396,12 +397,15 @@ class PIEPredict(object):
         if not os.path.exists(plot_path):
             os.makedirs(plot_path)
 
-        train_mse = history.history['loss']
-        val_mse = history.history['val_loss']
-
+        train_mse = history.history['mean_squared_error']
+        val_mse = history.history['val_mean_squared_error']
         # draw traj metric
-        plt.plot(train_mse, color='r')
-        plt.plot(val_mse, color='b')
+        plt.close()
+        plt.plot(train_mse, color='r', label='train')
+        plt.plot(val_mse, color='b', label='val')
+        plt.xlabel('epoch')
+        plt.ylabel('mse')
+        plt.legend()
         plt.savefig(os.path.join(plot_path, 'metric.png'))
         plt.close()
 

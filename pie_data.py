@@ -94,6 +94,18 @@ class PIE(object):
                           'all': ['set01', 'set02', 'set03',
                                   'set04', 'set05', 'set06']}
         return image_set_nums[image_set]
+    def _get_image_set_ids2(self, image_set):
+        """
+        Returns default image set ids
+        :param image_set: Image set split
+        :return: Set ids of the image set
+        """
+        image_set_nums = {'train': ['set03', 'set05', 'set06'],
+                          'val': ['set01', 'set02'],
+                          'test': ['set04'],
+                          'all': ['set01', 'set02', 'set03',
+                                  'set04', 'set05', 'set06']}
+        return image_set_nums[image_set]
 
     def _get_image_path(self, sid, vid, fid):
         """
@@ -618,7 +630,7 @@ class PIE(object):
         :return: Balanced data sequence.
         """
         for lbl in seq_data[label_type]:
-            for i in lbl:
+            for i in lbl:  # 每条track
                 if i[0] not in [0, 1]:
                     raise Exception("The label values used for balancing must be"
                                     " either 0 or 1")
@@ -627,7 +639,7 @@ class PIE(object):
         print('---------------------------------------------------------')
         print("Balancing the number of positive and negative intention samples")
 
-        gt_labels = [gt[0] for gt in seq_data[label_type]]
+        gt_labels = [gt[0] for gt in seq_data[label_type]]  # 每条track一个值
         num_pos_samples = np.count_nonzero(np.array(gt_labels))
         num_neg_samples = len(gt_labels) - num_pos_samples
 
@@ -796,6 +808,8 @@ class PIE(object):
         _pids = None
         if params['data_split_type'] == 'default':
             set_ids = self._get_image_set_ids(image_set)
+        elif params['data_split_type'] == 'switch_default':
+            set_ids = self._get_image_set_ids2(image_set)
         else:
             set_ids = self._get_image_set_ids('all')
         if params['data_split_type'] == 'random':
@@ -888,7 +902,7 @@ class PIE(object):
                 pid_annots = annotations[sid][vid]['ped_annotations']
                 vid_annots = annotations[sid][vid]['vehicle_annotations']
                 for pid in sorted(pid_annots):
-                    if params['data_split_type'] != 'default' and pid not in _pids:
+                    if params['data_split_type'] in ['random', 'kfold'] and pid not in _pids:
                         continue
                     num_pedestrians += 1
                     frame_ids = pid_annots[pid]['frames']
@@ -976,7 +990,7 @@ class PIE(object):
                 pid_annots = annotations[sid][vid]['ped_annotations']
                 vid_annots = annotations[sid][vid]['vehicle_annotations']
                 for pid in sorted(pid_annots):
-                    if params['data_split_type'] != 'default' and pid not in _pids:
+                    if params['data_split_type'] in ['random', 'kfold'] and pid not in _pids:
                         continue
                     num_pedestrians += 1
 
@@ -1066,7 +1080,7 @@ class PIE(object):
                 img_width = annotations[sid][vid]['width']
                 pid_annots = annotations[sid][vid]['ped_annotations']
                 for pid in sorted(pid_annots):
-                    if params['data_split_type'] != 'default' and pid not in _pids:
+                    if params['data_split_type'] in ['random', 'kfold'] and pid not in _pids:
                         continue
                     num_pedestrians += 1
                     exp_start_frame = pid_annots[pid]['attributes']['exp_start_point']

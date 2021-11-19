@@ -633,8 +633,11 @@ class PIEIntent(object):
         train_intent_acc = history.history['acc']
         val_intent_acc = history.history['val_acc']
         # draw intent metric
-        plt.plot(train_intent_acc, color='r')
-        plt.plot(val_intent_acc, color='b')
+        plt.plot(train_intent_acc, color='r', label='train')
+        plt.plot(val_intent_acc, color='b', label='val')
+        plt.xlabel('epoch')
+        plt.ylabel('acc')
+        plt.legend()
         plt.savefig(os.path.join(plot_path, 'intent_metric.png'))
 
         with open(history_path, 'wb') as fid:
@@ -736,3 +739,18 @@ class PIEIntent(object):
                 with open(save_results_path, 'wb') as fid:
                     pickle.dump(results, fid, pickle.HIGHEST_PROTOCOL)
             return acc, f1
+
+def getPrecision(y_true, y_pred):
+    TP = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))#TP
+    N = (-1)*K.sum(K.round(K.clip(y_true-K.ones_like(y_true), -1, 0)))#N
+    TN=K.sum(K.round(K.clip((y_true-K.ones_like(y_true))*(y_pred-K.ones_like(y_pred)), 0, 1)))#TN
+    FP=N-TN
+    precision = TP / (TP + FP + K.epsilon())#TT/P
+    return precision
+ 
+def getRecall(y_true, y_pred):
+    TP = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))#TP
+    P=K.sum(K.round(K.clip(y_true, 0, 1)))
+    FN = P-TP #FN=P-TP
+    recall = TP / (TP + FN + K.epsilon())#TP/(TP+FN)
+    return recall
