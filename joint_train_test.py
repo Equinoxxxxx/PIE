@@ -53,6 +53,8 @@ def train_joint(args):
     early_stop = args.early_stop
     data_split_type = args.data_split_type
     traj_only = args.traj_only
+    test_by_val = args.test_by_val
+
     
     data_opts = {'fstride': 1,
                  'sample_type': 'all',
@@ -87,7 +89,10 @@ def train_joint(args):
     pretrained_model_path = 'data/pie/intention/context_loc_pretrained'
 
     if train_test < 2:  # Train
-        beh_seq_val = imdb.generate_data_trajectory_sequence('val', **data_opts)
+        if test_by_val:
+            beh_seq_val = imdb.generate_data_trajectory_sequence('test', **data_opts)
+        else:
+            beh_seq_val = imdb.generate_data_trajectory_sequence('val', **data_opts)
         if balance_val:
             beh_seq_val = imdb.balance_samples_count(beh_seq_val, label_type='intention_binary')
 
@@ -129,11 +134,12 @@ def train_joint(args):
         beh_seq_test = imdb.generate_data_trajectory_sequence('test', **data_opts)
         if balance_test:
             beh_seq_test = imdb.balance_samples_count(beh_seq_test, label_type='intention_binary')
-        acc, f1 = t.test_chunk(beh_seq_test, data_opts, saved_files_path, False)
 
-        t = PrettyTable(['Acc', 'F1'])
-        t.title = 'Joint model (intent + bbox)'
-        t.add_row([acc, f1])
+        intent_acc, intent_recall, intent_precision, speed_mse, traj_mse = t.test(beh_seq_test, data_opts, saved_files_path, False)
+
+        t = PrettyTable(['acc', 'recall', 'precision', 'speed', 'traj'])
+        t.title = 'Joint model (intent + speed + bbox)'
+        t.add_row([intent_acc, intent_recall, intent_precision, speed_mse, traj_mse])
 
         print(t)
 
@@ -230,6 +236,7 @@ def main():
     parser.add_argument('--data_split_type', type=str, default='default')
 
     parser.add_argument('--traj_only', type=bool, default=False)
+    parser.add_argument('--test_by_val', type=bool, default=False)
 
     args = parser.parse_args()
     train_joint(args=args)

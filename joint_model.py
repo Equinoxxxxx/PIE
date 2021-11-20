@@ -45,7 +45,7 @@ from keras.optimizers import RMSprop
 from keras.preprocessing.image import img_to_array
 from keras.preprocessing.image import load_img
 from keras.utils import multi_gpu_model
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, mean_squared_error, precision_score, recall_score, confusion_matrix
 from sklearn.metrics import f1_score
 
 from utils import *
@@ -1002,8 +1002,7 @@ class PIEIntent(object):
               metrics={'intent_fc': 'acc','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
               data_opts={},
               gpu=1,
-              early_stop=False,
-              traj_only=False):
+              early_stop=False):
         """
         Training method for the model
         :param data_train: training data
@@ -1033,7 +1032,7 @@ class PIEIntent(object):
                                                       'plateau_patience': 5,
                                                       'min_lr': 0.0000001,
                                                       'monitor_value': 'val_traj_dec_fc_mean_squared_error'},
-                        'model': 'convlstm_encdec',
+                        'model': 'joint_model',
                         'data_type': data_type,
                         'overlap': data_opts['seq_overlap_rate'],
                         'dataset': 'pie'}
@@ -1221,6 +1220,94 @@ class PIEIntent(object):
         
         return saved_files_path
 
+    def test(self, data_test, data_opts='', model_path='', visualize=False):
+        with open(os.path.join(model_path, 'configs.pkl'), 'rb') as fid:
+            try:
+                configs = pickle.load(fid)
+            except:
+                configs = pickle.load(fid, encoding='bytes')
+        train_params = configs[1]
+        self.load_model_config(configs[0])
+        # Create context model
+        self.context_model = vgg16.VGG16(input_shape=(224, 224, 3),
+                                         include_top=False,
+                                         weights='imagenet')
+
+        try:
+            test_model = load_model(os.path.join(model_path, 'model.h5'))
+
+        except:
+            test_model = self.get_model(train_params['model'])
+            test_model.load_weights(os.path.join(model_path, 'model.h5'))
+
+        test_model.summary()
+
+        overlap = 1  # train_params ['overlap']
+        obs_length = data_opts['max_size_observe']
+        pred_length = data_opts['max_size_predict']
+        test_d = self.get_data(data_test, observe_length=obs_length, predict_length=pred_length, track_overlap=overlap)
+        test_obs_bbox = np.array(test_d['obs_bbox_normed'])
+        test_obs_speed = np.array(test_d['obs_obd_speed'])
+        test_pred_bbox = np.array(test_d['pred_bbox_normed'])
+        test_pred_intent = test_d['pred_target'][:, :, -1]
+        test_pred_intent = np.expand_dims(test_pred_intent, 2)
+        test_pred_speed = np.array(test_d['pred_obd_speed'])
+
+        test_obs_bbox_unnormed = test_d['obs_bbox']
+        test_pred_intent = test_pred_intent[:, 0]
+        test_img = self.load_images_and_process(test_d['obs_image'],
+                                               test_obs_bbox_unnormed,
+                                               test_d['obs_pid'],
+                                               data_type='val',
+                                               save_path=self.get_path(type_save='data',
+                                                                       data_type='features' + '_' + data_opts[
+                                                                           'crop_type'] + '_' + data_opts['crop_mode'],
+                                                                       model_name='vgg16_' + 'none',
+                                                                       data_subset='test'))
+        test_data = ([test_img, test_obs_bbox, test_obs_speed], [test_pred_intent, test_pred_speed, test_pred_bbox])
+        res_intent, res_speed, res_bbox = test_model.predict(test_data[0], batch_size=1, verbose=1)
+        abs_res_bbox = res_bbox + np.expand_dims(test_obs_bbox_unnormed[:, 0], 1)
+
+        intent_acc = accuracy_score(test_pred_intent, np.round(res_intent))
+        intent_recall = recall_score(test_pred_intent, np.round(res_intent))
+        intent_precision = precision_score(test_pred_intent, np.round(res_intent))
+        speed_mse = mean_squared_error(test_pred_speed, res_speed)
+        traj_mse = mean_squared_error(test_pred_bbox, res_bbox)
+
+        save_results_path = os.path.join(model_path, 'ped_intents.pkl')
+        if not os.path.exists(save_results_path):
+            results = {'intent_acc': intent_acc,
+                       'intent_recall': intent_recall,
+                       'intent_precision': intent_precision,
+                       'speed_mse': speed_mse,
+                       'traj_mse': traj_mse,
+                       'res_intent': res_intent,
+                       'res_speed': res_speed,
+                       'res_bbox': res_bbox,
+                       'abs_res_bbox': abs_res_bbox,
+                       'test_pred_intent': test_pred_intent,
+                       'test_img_path': test_d['obs_image'],
+                        'test_obs_bbox': test_obs_bbox,
+                       'test_obs_speed': test_obs_speed
+                       }
+            with open(save_results_path, 'wb') as fid:
+                pickle.dump(results, fid, pickle.HIGHEST_PROTOCOL)
+
+            if visualize:
+                vis_path = os.path.join(model_path, 'vis_traj')
+                if not os.path.exists(vis_path):
+                    os.mkdir(vis_path)
+                for s in range(res_bbox.shape[0]):
+                    s_name = test_d['obs_image'][s][0].split('/')[-1]
+                    plt.close()
+                    plt.plot(test_obs_bbox[s, 0], test_obs_bbox[s, 1], color='black', label='obs')
+                    plt.plot(test_pred_bbox[s, 0], test_pred_bbox[s, 1], color='blue', label='gt')
+                    plt.plot(res_bbox[s, 0], res_bbox[s, 1], color='red', label='predicted')
+                    plt.legend(['train', 'val'])
+                    plt.savefig(os.path.join(vis_path, s_name) + '.png')
+                    plt.close()
+        return intent_acc, intent_recall, intent_precision, speed_mse, traj_mse
+
     #split test data into chunks
     def test_chunk(self,
                    data_test,
@@ -1297,7 +1384,6 @@ class PIEIntent(object):
                                         'ped_id': ped[-1][0],
                                         'res': test_results_chunk[i][0],
                                         'target': test_target_data_chunk[i]})
-
 
             acc = accuracy_score(test_target_data, np.round(test_results))
             f1 = f1_score(test_target_data, np.round(test_results))
