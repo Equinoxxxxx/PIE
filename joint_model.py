@@ -591,12 +591,57 @@ class PIEIntent(object):
                     activation=self._activation,
                     name=name)
 
+    def traj_only_model(self):
+        traj_input = Input(shape=(self._encoder_seq_length, 4), name='traj_input')
+        dec_input = Input(shape=(self._encoder_seq_length, 2), name='dec_input')
+        # Encode trajectory
+        # Temporal attention module
+        traj_attention_net = self.attention_temporal(traj_input, self._encoder_seq_length)
+
+        # Generate Encoder LSTM Unit
+        traj_encoder = self.create_lstm_model(name='traj_encoder')
+        traj_encoder_outputs_states = traj_encoder(traj_attention_net)
+        traj_encoder_states = traj_encoder_outputs_states[1:]
+
+        # Generate Decoder LSTM unit
+        traj_decoder = self.create_lstm_model(name='traj_decoder', r_state=False, r_sequence=True)
+
+        traj_enc_fc_in = RepeatVector(self._decoder_seq_length)(traj_encoder_states[0])
+        # speed_decoder_input = Input(shape=(self._predict_length, self._decoder_feature_size),
+        #                        name='pred_decoder_input')
+
+        # Embedding unit on the output of Encoder
+        traj_enc_fc_out = Dense(64, activation='relu', name='traj_enc_fc')(traj_enc_fc_in)
+        traj_enc_fc_out = Dropout(0, name='dropout_traj_enc_fc')(traj_enc_fc_out)
+
+        # Predict trajectory
+
+        traj_dec_in = Concatenate(axis=2)([traj_enc_fc_out, dec_input])
+
+        # Self attention unit
+        att_input_dim = 64 + 2
+        traj_dec_in = self.attention_element(traj_dec_in, att_input_dim)
+
+        # Initialize the decoder with encoder states
+        traj_dec_out = traj_decoder(traj_dec_in,
+                                    initial_state=traj_encoder_states)
+        traj_dec_out = Dense(4,
+                             activation='linear',
+                             name='traj_dec_fc')(traj_dec_out)
+
+        ##########
+        # Define model
+        self.train_model = Model(inputs=[traj_input, dec_input],
+                                 outputs=[traj_dec_out])
+        self.train_model.summary()
+        return self.train_model
+
     def pie_convlstm_encdec(self):
         '''
         Create an LSTM Encoder-Decoder model for intention estimation
         '''
         #Generate input data. the shapes is (sequence_lenght,length of flattened features)
-        encoder_input=input_data=Input(shape=(self._sequence_length,) + self.context_model.output_shape[1:],
+        encoder_input=Input(shape=(self._sequence_length,) + self.context_model.output_shape[1:],
                                        name = "encoder_input")
         interm_input = encoder_input
 
@@ -779,6 +824,172 @@ class PIEIntent(object):
         output_attention_mul = Multiply()([input_data, input_data_probs])  # name='att_mul'
         return output_attention_mul
     
+    def train_traj_only(self,
+              data_train,
+              data_val,
+              batch_size=128,
+              epochs=100,
+              optimizer_type='rmsprop',
+              optimizer_params={'lr': 0.00001, 'clipvalue': 0.0, 'decay': 0.0},
+              loss={'intent_fc': 'binary_crossentropy','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
+              metrics={'intent_fc': 'acc','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
+              data_opts={},
+              gpu=1,
+              early_stop=False):
+        data_type = {'encoder_input_type': data_opts['encoder_input_type'],
+                     'decoder_input_type': data_opts['decoder_input_type'],
+                     'output_type': data_opts['output_type']}
+
+        train_config = {'batch_size': batch_size,
+                        'epoch': epochs,
+                        'optimizer_type': optimizer_type,
+                        'optimizer_params': optimizer_params,
+                        'loss': loss,
+                        'metrics': metrics,
+                        'learning_scheduler_mode': 'plateau',
+                        'learning_scheduler_params': {'exp_decay_param': 0.3,
+                                                      'step_drop_rate': 0.5,
+                                                      'epochs_drop_rate': 20.0,
+                                                      'plateau_patience': 5,
+                                                      'min_lr': 0.0000001,
+                                                      'monitor_value': 'val_traj_dec_fc_mean_squared_error'},
+                        'model': 'convlstm_encdec',
+                        'data_type': data_type,
+                        'overlap': data_opts['seq_overlap_rate'],
+                        'dataset': 'pie'}
+        self._model_type = 'convlstm_encdec'
+        obs_length = data_opts['max_size_observe']
+        pred_length = data_opts['max_size_predict']
+        # import pdb; pdb.set_trace()
+        train_d = self.get_data(data_train, observe_length=obs_length, predict_length=pred_length,
+                                track_overlap=data_opts['seq_overlap_rate'])
+        val_d = self.get_data(data_val, observe_length=obs_length, predict_length=pred_length,
+                              track_overlap=data_opts['seq_overlap_rate'])
+
+        train_obs_bbox = np.array(train_d['obs_bbox_normed'])
+        train_pred_bbox = np.array(train_d['pred_bbox_normed'])
+        train_dec_input = np.zeros(shape=train_obs_bbox.shape[:2] + (2,))
+
+        val_obs_bbox = np.array(val_d['obs_bbox_normed'])
+        val_pred_bbox = np.array(val_d['pred_bbox_normed'])
+        val_dec_input = np.zeros(shape=val_obs_bbox.shape[:2] + (2,))
+
+        self._encoder_seq_length = train_obs_bbox.shape[1]
+        self._decoder_seq_length = train_pred_bbox.shape[1]
+
+        self._sequence_length = self._encoder_seq_length
+
+        ori_model = self.traj_only_model()
+
+
+        train_data = (
+        [train_obs_bbox, train_dec_input], [train_pred_bbox])
+        val_data = ([val_obs_bbox, val_dec_input], [val_pred_bbox])
+
+        optimizer = RMSprop(lr=optimizer_params['lr'],
+                            decay=optimizer_params['decay'],
+                            clipvalue=optimizer_params['clipvalue'])
+        train_model = ori_model
+        if gpu > 1:
+            train_model = multi_gpu_model(ori_model, gpus=gpu)
+        train_model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
+        print('TRAINING: loss={} metrics={}'.format(loss, metrics))
+
+        # automatically generate model name as a time string
+        model_folder_name = time.strftime("%d%b%Y-%Hh%Mm%Ss")
+
+        model_path, _ = self.get_path(type_save='models',
+                                      model_name='joint_model',
+                                      models_save_folder=model_folder_name,
+                                      file_name='model.h5',
+                                      save_root_folder='data')
+        config_path, _ = self.get_path(type_save='models',
+                                       model_name='joint_model',
+                                       models_save_folder=model_folder_name,
+                                       file_name='configs',
+                                       save_root_folder='data')
+
+        # Save config and training param files
+        with open(config_path + '.pkl', 'wb') as fid:
+            pickle.dump([self.get_model_config(),
+                         train_config, data_opts],
+                        fid, pickle.HIGHEST_PROTOCOL)
+        print('Wrote configs to {}'.format(config_path))
+
+        # Save config and training param files
+        with open(config_path + '.txt', 'wt') as fid:
+            fid.write("####### Data options #######\n")
+            fid.write(str(data_opts))
+            fid.write("\n####### Model config #######\n")
+            fid.write(str(self.get_model_config()))
+            fid.write("\n####### Training config #######\n")
+            fid.write(str(train_config))
+
+        main_metric = 'val_traj_dec_fc_mean_squared_error'
+
+        early_stopping = EarlyStopping(monitor=main_metric,
+                                       min_delta=0.0001,
+                                       patience=5,
+                                       verbose=1)
+        checkpoint = ParallelModelCheckpoint(model=ori_model,
+                                             filepath=model_path,
+                                             save_best_only=True,
+                                             save_weights_only=False,
+                                             monitor=main_metric)  # , mode = 'min'
+        plateau_sch = ReduceLROnPlateau(monitor=main_metric,
+                                        factor=train_config['learning_scheduler_params']['step_drop_rate'],
+                                        patience=train_config['learning_scheduler_params']['plateau_patience'],
+                                        min_lr=train_config['learning_scheduler_params']['min_lr'],
+                                        verbose=1)
+
+        call_backs = [checkpoint, plateau_sch]
+        if early_stop:
+            call_backs = [checkpoint, early_stopping, plateau_sch]
+
+        history = train_model.fit(x=train_data[0],
+                                  y=train_data[1],
+                                  batch_size=batch_size,
+                                  epochs=epochs,
+                                  validation_data=val_data,
+                                  callbacks=call_backs,
+                                  verbose=1)
+
+        history_path, saved_files_path = self.get_path(type_save='models',
+                                                       model_name='joint_model',
+                                                       models_save_folder=model_folder_name,
+                                                       file_name='history.pkl')
+        '''
+        history.history.keys():
+        ['val_loss', 'val_intent_fc_loss', 'val_speed_dec_fc_loss', 'val_traj_dec_fc_loss', 'val_intent_fc_acc', 'val_speed_dec_fc_mean_squared_error', 'val_traj_dec_fc_mean_squared_error', 
+        'loss', 'intent_fc_loss', 
+        'speed_dec_fc_loss', 'traj_dec_fc_loss', 'intent_fc_acc', 
+        'speed_dec_fc_mean_squared_error', 'traj_dec_fc_mean_squared_error', 'lr']
+        '''
+        # plot loss and val metric
+        plot_path = os.path.join(saved_files_path, 'plot')
+        if not os.path.exists(plot_path):
+            os.makedirs(plot_path)
+
+        train_traj_mse = history.history['traj_dec_fc_mean_squared_error']
+        val_traj_mse = history.history['val_traj_dec_fc_mean_squared_error']
+        # draw traj metric
+        plt.plot(train_traj_mse, color='r', label='train')
+        plt.plot(val_traj_mse, color='b', label='val')
+        plt.xlabel('epoch')
+        plt.ylabel('mse')
+        plt.legend(['train', 'val'])
+        plt.savefig(os.path.join(plot_path, 'traj_metric.png'))
+        plt.close()
+
+        with open(history_path, 'wb') as fid:
+            pickle.dump(history.history, fid, pickle.HIGHEST_PROTOCOL)
+        print('Wrote history to {}'.format(config_path))
+
+        del train_data, val_data  # clear memory
+        del train_d, val_d
+
+        return saved_files_path
+
     def train(self,
               data_train,
               data_val,
@@ -791,7 +1002,8 @@ class PIEIntent(object):
               metrics={'intent_fc': 'acc','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
               data_opts={},
               gpu=1,
-              early_stop=False):
+              early_stop=False,
+              traj_only=False):
         """
         Training method for the model
         :param data_train: training data

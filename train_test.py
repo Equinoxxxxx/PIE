@@ -186,7 +186,8 @@ def train_predict(dataset='pie',
         perf_final = t.test_final(beh_seq_test,
                                   traj_model_path=traj_model_path, 
                                   speed_model_path=speed_model_path,
-                                  intent_model_path=intent_model_path)
+                                  intent_model_path=intent_model_path,
+                                  traj_only=traj_only)
 
         t = PrettyTable(['MSE', 'C_MSE'])
         t.title = 'Trajectory prediction model (loc + PIE_intent + PIE_speed)'
@@ -212,8 +213,11 @@ def main():
     parser.add_argument('--traj_only', type=bool, default=False)
 
     args = parser.parse_args()
-    intent_model_path = train_intent(args)
-    train_predict(args=args, intent_model_path=intent_model_path)
+    if not args.traj_only and args.intent_epochs > 0:
+        intent_model_path = train_intent(args)
+        train_predict(args=args, intent_model_path=intent_model_path)
+    else:
+        train_predict(args=args)
 
 
 if __name__ == '__main__':

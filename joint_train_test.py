@@ -97,17 +97,29 @@ def train_joint(args):
         if balance_train:
             beh_seq_train = imdb.balance_samples_count(beh_seq_train, label_type='intention_binary')
 
-        saved_files_path = t.train(data_train=beh_seq_train,
-                                   data_val=beh_seq_val,
-                                   epochs=epochs,
-                                   loss={'intent_fc': 'binary_crossentropy','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
-                                   loss_weights={'intent_fc': intent_loss_weight,'speed_dec_fc': speed_loss_weight, 'traj_dec_fc': traj_loss_weight},
-                                   metrics={'intent_fc': ['acc', getRecall, getPrecision],'speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
-                                   batch_size=batch_size,
-                                   optimizer_type='rmsprop',
-                                   data_opts=data_opts,
-                                   gpu=1,
-                                   early_stop=early_stop)
+        if traj_only:
+            saved_files_path = t.train_traj_only(data_train=beh_seq_train,
+                                                 data_val=beh_seq_val,
+                                                 epochs=epochs,
+                                                 loss=['mse'],
+                                                 metrics=['mse'],
+                                                 batch_size=batch_size,
+                                                 optimizer_type='rmsprop',
+                                                 data_opts=data_opts,
+                                                 gpu=1,
+                                                 early_stop=early_stop)
+        else:
+            saved_files_path = t.train(data_train=beh_seq_train,
+                                       data_val=beh_seq_val,
+                                       epochs=epochs,
+                                       loss={'intent_fc': 'binary_crossentropy','speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
+                                       loss_weights={'intent_fc': intent_loss_weight,'speed_dec_fc': speed_loss_weight, 'traj_dec_fc': traj_loss_weight},
+                                       metrics={'intent_fc': ['acc', getRecall, getPrecision],'speed_dec_fc': 'mse', 'traj_dec_fc': 'mse'},
+                                       batch_size=batch_size,
+                                       optimizer_type='rmsprop',
+                                       data_opts=data_opts,
+                                       gpu=1,
+                                       early_stop=early_stop)
 
         print(data_opts['seq_overlap_rate'])
         print('Training done, joint model saved in ' + saved_files_path)
@@ -116,7 +128,8 @@ def train_joint(args):
             saved_files_path = pretrained_model_path
         beh_seq_test = imdb.generate_data_trajectory_sequence('test', **data_opts)
         if balance_test:
-            acc, f1 = t.test_chunk(beh_seq_test, data_opts, saved_files_path, False)
+            beh_seq_test = imdb.balance_samples_count(beh_seq_test, label_type='intention_binary')
+        acc, f1 = t.test_chunk(beh_seq_test, data_opts, saved_files_path, False)
 
         t = PrettyTable(['Acc', 'F1'])
         t.title = 'Joint model (intent + bbox)'

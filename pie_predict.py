@@ -22,6 +22,7 @@ import time
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 from keras.layers import Input, RepeatVector, Dense, Permute
 from keras.layers import Concatenate, Multiply, Dropout
@@ -352,7 +353,11 @@ class PIEPredict(object):
 
         pie_model = self.pie_encdec()
 
+
         # Generate training data
+        if traj_only:
+            train_data['dec_input'] = np.zeros(shape=train_data['dec_input'].shape)
+            val_data['dec_input'] = np.zeros(shape=val_data['dec_input'].shape)
         train_data = ([train_data['enc_input'],
                        train_data['dec_input']],
                       train_data['pred_target'])
@@ -360,7 +365,6 @@ class PIEPredict(object):
         val_data = ([val_data['enc_input'],
                      val_data['dec_input']],
                     val_data['pred_target'])
-
         pie_model.compile(loss=loss, optimizer=optimizer, metrics=['mse'])
 
         print("##############################################")
@@ -501,7 +505,7 @@ class PIEPredict(object):
 
         return perf
 
-    def test_final(self, data_test, traj_model_path='', intent_model_path='', speed_model_path=''):
+    def test_final(self, data_test, traj_model_path='', intent_model_path='', speed_model_path='', traj_only=False):
 
         intent_path = os.path.join(intent_model_path, 'ped_intents.pkl')
         with open(intent_path, 'rb') as fid:
@@ -579,6 +583,9 @@ class PIEPredict(object):
 
         # speed intent
         int_speed = np.concatenate([int_data, speed_results], axis=2)
+
+        if traj_only:
+            int_speed = np.zeros(shape=int_speed.shape)
         test_results = box_intent_speed_model.predict([box_data['enc_input'], int_speed],
                                                       batch_size=2056, verbose=1)
 
